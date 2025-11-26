@@ -1,0 +1,5 @@
+{
+  "name": "ApexLive (F1)",
+  "description": "A comprehensive F1 dashboard featuring live session simulation, real-time telemetry visualization, and AI-powered strategy insights using Gemini.",
+  "requestFramePermissions": []
+}
