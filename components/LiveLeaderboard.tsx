@@ -120,11 +120,11 @@ const LiveLeaderboard: React.FC<Props> = ({ drivers }) => {
         <table className="w-full text-left border-collapse">
           <thead className="bg-[#151515] text-[10px] uppercase text-neutral-500 sticky top-0 z-10 font-bold tracking-widest border-b border-[#222] font-orbitron shadow-md">
             <tr>
-              <th className="py-2 px-2 text-center w-10">Pos</th>
+              <th className="py-2 px-2 text-center w-8 sm:w-10">Pos</th>
               <th className="py-2 px-2">Driver</th>
-              <th className="py-2 px-2 text-right w-16">Int</th>
-              <th className="py-2 px-2 text-center w-10">Age</th>
-              <th className="py-2 px-2 text-center w-10">Tyre</th>
+              <th className="py-2 px-2 text-right w-16 hidden sm:table-cell">Int</th>
+              <th className="py-2 px-2 text-center w-10 hidden md:table-cell">Age</th>
+              <th className="py-2 px-2 text-center w-8 sm:w-10">Tyre</th>
             </tr>
           </thead>
           <tbody className="text-neutral-200 text-sm font-medium font-rajdhani">
@@ -155,7 +155,7 @@ const LiveLeaderboard: React.FC<Props> = ({ drivers }) => {
                 <tr key={driver.id} className={rowClass}>
                   
                   {/* POSITION */}
-                  <td className={`py-2 px-2 text-center font-bold font-rajdhani text-base`}>
+                  <td className={`py-3 md:py-2 px-2 text-center font-bold font-rajdhani text-base`}>
                     <PositionBadge 
                         position={driver.position || (index + 1)} 
                         isOut={isOut} 
@@ -170,7 +170,7 @@ const LiveLeaderboard: React.FC<Props> = ({ drivers }) => {
                       {/* Team Line */}
                       <div className="w-1 h-8 rounded-full" style={{ backgroundColor: driver.teamColor }}></div>
                       
-                      {/* Headshot */}
+                      {/* Headshot (Hidden on mobile) */}
                       <div className="w-9 h-9 rounded bg-[#1a1a1a] overflow-hidden relative shrink-0 border border-[#333] hidden sm:block">
                         {driver.imgUrl ? (
                             <img 
@@ -209,12 +209,12 @@ const LiveLeaderboard: React.FC<Props> = ({ drivers }) => {
                   </td>
 
                   {/* INTERVAL */}
-                  <td className={`py-2 px-2 text-right font-rajdhani font-semibold tabular-nums ${isOut ? 'text-red-900/50 italic text-xs' : isLeader ? 'text-yellow-500' : 'text-neutral-300'}`}>
+                  <td className={`py-2 px-2 text-right font-rajdhani font-semibold tabular-nums hidden sm:table-cell ${isOut ? 'text-red-900/50 italic text-xs' : isLeader ? 'text-yellow-500' : 'text-neutral-300'}`}>
                      {intervalDisplay}
                   </td>
 
                   {/* TYRE AGE */}
-                  <td className={`py-2 px-2 text-center font-rajdhani font-medium ${isOut ? 'text-neutral-800' : 'text-neutral-400'} tabular-nums`}>
+                  <td className={`py-2 px-2 text-center font-rajdhani font-medium hidden md:table-cell ${isOut ? 'text-neutral-800' : 'text-neutral-400'} tabular-nums`}>
                       {isOut || driver.tireAge === undefined ? '-' : `${driver.tireAge} L`}
                   </td>
 

@@ -13,8 +13,14 @@ interface LiveCircuitProps {
 // Helper: Linear Interpolation
 const lerp = (start: number, end: number, factor: number) => start + (end - start) * factor;
 
+// Helper: Calculate distance between two points
+const getDistance = (x1: number, y1: number, x2: number, y2: number) => {
+    return Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+};
+
 const LiveCircuit: React.FC<LiveCircuitProps> = ({ session, currentTime, drivers, playbackSpeed }) => {
   const [trackPath, setTrackPath] = useState<string | null>(null);
+  const [sectorPaths, setSectorPaths] = useState<{ s1: string, s2: string, s3: string } | null>(null);
   const [mapTransform, setMapTransform] = useState<{ minX: number, minY: number, scale: number, offsetX: number, offsetY: number } | null>(null);
   const [driverCoordinates, setDriverCoordinates] = useState<Record<string, { x: number, y: number }>>({});
   const [startLineCoords, setStartLineCoords] = useState<{ x: number, y: number } | null>(null);
@@ -23,6 +29,7 @@ const LiveCircuit: React.FC<LiveCircuitProps> = ({ session, currentTime, drivers
   // Followed Driver State
   const [activeDriverId, setActiveDriverId] = useState<string | null>(null);
   const [activeDriverTelemetry, setActiveDriverTelemetry] = useState<{ speed: number; gear: number; throttle: number; brake: number; rpm: number } | null>(null);
+  const [currentSector, setCurrentSector] = useState<1 | 2 | 3 | null>(null);
   
   // Buffer to hold location packets for interpolation
   // Structure: { [driverId]: [{ x, y, date (ms) }, ...] }
@@ -33,11 +40,14 @@ const LiveCircuit: React.FC<LiveCircuitProps> = ({ session, currentTime, drivers
   const telemetryBuffer = useRef<{ date: number, speed: number, gear: number, throttle: number, brake: number, rpm: number }[]>([]);
   const lastTelemetryFetchTime = useRef<number>(0);
 
+  // Reference points for sector lookup: [{x, y, sector}]
+  const referencePoints = useRef<{x: number, y: number, sector: 1 | 2 | 3}[]>([]);
+
   // Refs to prevent stale closures
   const latestProps = useRef({ session, currentTime, activeDriverId });
   useEffect(() => { latestProps.current = { session, currentTime, activeDriverId }; }, [session, currentTime, activeDriverId]);
 
-  // 1. Generate Static Track Map
+  // 1. Generate Static Track Map & Sectors
   useEffect(() => {
     let isMounted = true;
     
@@ -52,7 +62,7 @@ const LiveCircuit: React.FC<LiveCircuitProps> = ({ session, currentTime, drivers
         
         for (const dId of potentialDrivers) {
             const laps = await getLaps(session.session_key, dId);
-            const validLap = laps.find((l: any) => l.lap_number === 2 && l.duration_sector_1); 
+            const validLap = laps.find((l: any) => l.lap_number === 2 && l.duration_sector_1 && l.duration_sector_2 && l.duration_sector_3); 
             if (validLap) {
                 referenceLap = validLap;
                 break;
@@ -61,7 +71,7 @@ const LiveCircuit: React.FC<LiveCircuitProps> = ({ session, currentTime, drivers
         
         if (!referenceLap) {
             const allLaps = await getLaps(session.session_key);
-            referenceLap = allLaps.find((l: any) => l.lap_number === 2);
+            referenceLap = allLaps.find((l: any) => l.lap_number === 2 && l.duration_sector_1);
         }
 
         if (!referenceLap && isMounted) {
@@ -89,7 +99,7 @@ const LiveCircuit: React.FC<LiveCircuitProps> = ({ session, currentTime, drivers
             if (loc.y > maxY) maxY = loc.y;
         });
 
-        // 4. Generate Path & Transform
+        // 4. Transform Logic
         const VIEWBOX_SIZE = 800;
         const PADDING = 60;
         
@@ -100,18 +110,66 @@ const LiveCircuit: React.FC<LiveCircuitProps> = ({ session, currentTime, drivers
         const offsetX = (VIEWBOX_SIZE - width * scale) / 2;
         const offsetY = (VIEWBOX_SIZE - height * scale) / 2;
 
-        const pathData = locations.map((loc: any, i: number) => {
-            const x = (loc.x - minX) * scale + offsetX;
-            const y = 800 - ((loc.y - minY) * scale + offsetY); 
-            return `${i === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`;
-        }).join(' ');
+        const transformX = (x: number) => (x - minX) * scale + offsetX;
+        const transformY = (y: number) => 800 - ((y - minY) * scale + offsetY);
+
+        // 5. Generate Sector Paths
+        const tStart = new Date(referenceLap.date_start).getTime();
+        const tS1 = tStart + (referenceLap.duration_sector_1 * 1000);
+        const tS2 = tStart + ((referenceLap.duration_sector_1 + referenceLap.duration_sector_2) * 1000);
         
-        const finalPath = `${pathData} Z`;
+        const pathPointsS1: string[] = [];
+        const pathPointsS2: string[] = [];
+        const pathPointsS3: string[] = [];
+        
+        const refPoints: {x: number, y: number, sector: 1 | 2 | 3}[] = [];
+
+        locations.forEach((loc: any, i: number) => {
+            const t = new Date(loc.date).getTime();
+            const x = transformX(loc.x);
+            const y = transformY(loc.y);
+            const ptStr = `${i === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`;
+            
+            // Raw coordinates for lookup (not transformed for simplicity in distance calc, or transformed? 
+            // Let's use raw for lookup to match incoming driver data, BUT we need to transform driver data later.
+            // Actually, simpler to store Reference Points in RAW GPS space for lookup, then transform map.
+            
+            let sector: 1 | 2 | 3 = 3;
+            if (t < tS1) sector = 1;
+            else if (t < tS2) sector = 2;
+            
+            refPoints.push({ x: loc.x, y: loc.y, sector });
+
+            if (sector === 1) pathPointsS1.push(ptStr);
+            else if (sector === 2) pathPointsS2.push(ptStr);
+            else pathPointsS3.push(ptStr);
+        });
+
+        // Stitch paths (ensure continuity visually by adding start point of next sector to prev)
+        // Ideally we just draw them. SVG 'M' resets the path.
+        
+        // Fix for 'M' at start of sectors 2 and 3
+        const fixPath = (pts: string[]) => {
+            if (pts.length === 0) return '';
+            // Ensure first point is Move
+            if (pts[0].startsWith('L')) pts[0] = pts[0].replace('L', 'M');
+            return pts.join(' ');
+        };
+
+        const finalPath = locations.map((loc: any, i: number) => {
+            return `${i === 0 ? 'M' : 'L'} ${transformX(loc.x).toFixed(1)} ${transformY(loc.y).toFixed(1)}`;
+        }).join(' ') + ' Z';
 
         if (isMounted) {
             setTrackPath(finalPath);
+            setSectorPaths({
+                s1: fixPath(pathPointsS1),
+                s2: fixPath(pathPointsS2),
+                s3: fixPath(pathPointsS3)
+            });
             setMapTransform({ minX, minY, scale, offsetX, offsetY });
             setStartLineCoords({ x: locations[0].x, y: locations[0].y });
+            referencePoints.current = refPoints;
             setLoadingMap(false);
         }
 
@@ -248,6 +306,8 @@ const LiveCircuit: React.FC<LiveCircuitProps> = ({ session, currentTime, drivers
           
           // --- LOCATION INTERPOLATION ---
           const newCoords: Record<string, { x: number, y: number }> = {};
+          let activeDriverPos = null;
+
           Object.keys(locationBuffer.current).forEach(dId => {
               const points = locationBuffer.current[dId];
               if (points.length < 2) return;
@@ -260,24 +320,52 @@ const LiveCircuit: React.FC<LiveCircuitProps> = ({ session, currentTime, drivers
                   }
               }
 
+              let x = 0, y = 0;
               if (idx !== -1) {
                   const p1 = points[idx];
                   const p2 = points[idx+1];
                   const total = p2.date - p1.date;
                   const elapsed = targetTime - p1.date;
                   const factor = Math.max(0, Math.min(1, elapsed / total));
-                  newCoords[dId] = { x: lerp(p1.x, p2.x, factor), y: lerp(p1.y, p2.y, factor) };
+                  x = lerp(p1.x, p2.x, factor);
+                  y = lerp(p1.y, p2.y, factor);
               } else {
-                  if (points[0].date > targetTime) newCoords[dId] = { x: points[0].x, y: points[0].y };
+                  if (points[0].date > targetTime) { x = points[0].x; y = points[0].y; }
                   else if (points[points.length-1].date < targetTime) {
                       const last = points[points.length-1];
-                      newCoords[dId] = { x: last.x, y: last.y };
+                      x = last.x; y = last.y;
                   }
+              }
+              
+              if (x !== 0 && y !== 0) {
+                  newCoords[dId] = { x, y };
+                  if (dId === activeDriverId) activeDriverPos = { x, y };
               }
           });
 
           if (Object.keys(newCoords).length > 0) {
               setDriverCoordinates(newCoords);
+          }
+
+          // --- SECTOR DETECTION (Nearest Neighbor) ---
+          if (activeDriverPos && referencePoints.current.length > 0) {
+              // Find closest reference point
+              let minDist = Infinity;
+              let closestSector: 1 | 2 | 3 = 1;
+              
+              // Optimization: We know the track is sequential, could improve search, but linear scan of ~3000 pts is fast enough in JS
+              // Or sample every 10th point
+              for (let i = 0; i < referencePoints.current.length; i += 5) {
+                  const pt = referencePoints.current[i];
+                  const d = Math.abs(pt.x - activeDriverPos.x) + Math.abs(pt.y - activeDriverPos.y); // Manhattan dist is faster and good enough
+                  if (d < minDist) {
+                      minDist = d;
+                      closestSector = pt.sector;
+                  }
+              }
+              setCurrentSector(closestSector);
+          } else if (!activeDriverId) {
+              setCurrentSector(null);
           }
 
           // --- TELEMETRY INTERPOLATION ---
@@ -332,6 +420,8 @@ const LiveCircuit: React.FC<LiveCircuitProps> = ({ session, currentTime, drivers
           <TrackMap 
             drivers={drivers}
             trackPath={trackPath}
+            sectorPaths={sectorPaths}
+            activeSector={currentSector}
             mapTransform={mapTransform}
             driverCoordinates={driverCoordinates}
             startLineCoordinates={startLineCoords}

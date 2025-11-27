@@ -28,7 +28,9 @@ import {
   Radio,
   Timer,
   Flag,
-  Map as MapIcon
+  Map as MapIcon,
+  Settings2,
+  X
 } from 'lucide-react';
 
 const AVAILABLE_YEARS = [2025, 2024, 2023];
@@ -47,6 +49,7 @@ const formatLapTime = (seconds: number | string): string => {
 export default function App() {
   // Navigation State
   const [currentView, setCurrentView] = useState<'dashboard' | 'telemetry' | 'circuit'>('dashboard');
+  const [showMobileSettings, setShowMobileSettings] = useState(false);
 
   // Selection State
   const [selectedYear, setSelectedYear] = useState(2025);
@@ -121,9 +124,9 @@ export default function App() {
   const fetchDataForTime = useCallback(async (time: Date, signal: AbortSignal, isThrottledUpdate: boolean = false) => {
       if (!session) return;
       
-      // FIX: Look at the immediate PAST ([T-1.2s, T]) instead of future to ensure accuracy
+      // FIX: Look at the immediate PAST ([T-1.1s, T]) instead of future to ensure accuracy
       // This ensures we only render what has definitively happened.
-      const windowSeconds = 1.2; 
+      const windowSeconds = 1.1; 
       const fetchTime = new Date(time.getTime() - (windowSeconds * 1000));
       const isoTime = fetchTime.toISOString();
       
@@ -157,7 +160,8 @@ export default function App() {
           
           positions.forEach((pos: any) => {
             const driver = newDrivers.find(d => d.id === pos.driver_number.toString());
-            if (driver) {
+            // Only update if we have a valid position
+            if (driver && pos.position) {
               driver.position = pos.position;
             }
           });
@@ -588,17 +592,18 @@ export default function App() {
   const displayLap = completedLaps >= totalLaps ? totalLaps : completedLaps + 1;
 
   return (
-    <div className="flex flex-col h-screen bg-[#0A0A0A] text-neutral-200 overflow-hidden font-exo selection:bg-red-600 selection:text-white">
+    <div className="flex flex-col h-[100dvh] bg-[#0A0A0A] text-neutral-200 overflow-hidden font-exo selection:bg-red-600 selection:text-white relative">
       
       {/* --- HEADER --- */}
-      <header className="shrink-0 h-14 bg-[#111] border-b border-[#222] flex items-center justify-between px-4 z-20 shadow-lg relative">
-        <div className="flex items-center gap-6">
+      <header className="shrink-0 h-14 bg-[#111] border-b border-[#222] flex items-center justify-between px-3 md:px-4 z-20 shadow-lg relative">
+        <div className="flex items-center gap-4 md:gap-6">
            <div className="font-orbitron font-black text-xl tracking-tighter flex items-center gap-1 select-none">
              <span className="text-red-600 italic">APEX</span><span className="text-white">LIVE</span>
            </div>
            
-           <div className="h-4 w-px bg-[#333]"></div>
+           <div className="h-4 w-px bg-[#333] hidden md:block"></div>
 
+           {/* Desktop Navigation */}
            <div className="flex gap-1 hidden md:flex">
              <button 
                onClick={() => setCurrentView('dashboard')}
@@ -622,7 +627,8 @@ export default function App() {
            
            <div className="h-4 w-px bg-[#333] hidden md:block"></div>
 
-           <div className="flex items-center gap-2 font-exo">
+           {/* Desktop Selectors (Hidden on Mobile) */}
+           <div className="hidden md:flex items-center gap-2 font-exo">
               <select 
                 className="bg-[#111] text-neutral-300 text-xs font-bold px-2 py-1 rounded border border-[#333] outline-none focus:border-red-600 transition-colors uppercase cursor-pointer hover:bg-[#1a1a1a]"
                 value={selectedYear}
@@ -632,7 +638,7 @@ export default function App() {
               </select>
               
               <select 
-                className="bg-[#111] text-neutral-300 text-xs font-bold px-2 py-1 rounded border border-[#333] outline-none focus:border-red-600 transition-colors max-w-[200px] uppercase truncate cursor-pointer hover:bg-[#1a1a1a]"
+                className="bg-[#111] text-neutral-300 text-xs font-bold px-2 py-1 rounded border border-[#333] outline-none focus:border-red-600 transition-colors max-w-[160px] uppercase truncate cursor-pointer hover:bg-[#1a1a1a]"
                 value={selectedMeetingKey || ''}
                 onChange={e => setSelectedMeetingKey(Number(e.target.value))}
               >
@@ -643,7 +649,7 @@ export default function App() {
               </select>
               
               <select 
-                 className="bg-[#111] text-neutral-300 text-xs font-bold px-2 py-1 rounded border border-[#333] outline-none focus:border-red-600 transition-colors hidden xl:block uppercase cursor-pointer hover:bg-[#1a1a1a]"
+                 className="bg-[#111] text-neutral-300 text-xs font-bold px-2 py-1 rounded border border-[#333] outline-none focus:border-red-600 transition-colors uppercase cursor-pointer hover:bg-[#1a1a1a] max-w-[160px] truncate"
                  value={session?.session_key || ''}
                  onChange={e => {
                     const s = allSessions.find(s => s.session_key === Number(e.target.value));
@@ -687,7 +693,7 @@ export default function App() {
                    {isAtLiveHead ? (
                        <div className="flex items-center gap-2 px-3 py-1 bg-red-900/20 border border-red-500/30 rounded animate-pulse">
                           <Radio size={12} className="text-red-500" />
-                          <span className="text-[10px] font-bold text-red-500 font-orbitron tracking-widest">LIVE</span>
+                          <span className="text-[10px] font-bold text-red-500 font-orbitron tracking-widest hidden sm:inline">LIVE</span>
                        </div>
                    ) : (
                        <button 
@@ -695,7 +701,7 @@ export default function App() {
                          className="flex items-center gap-2 px-3 py-1 bg-[#222] border border-red-600 text-red-500 rounded hover:bg-red-600 hover:text-white transition-colors"
                        >
                           <Radio size={12} />
-                          <span className="text-[10px] font-bold font-orbitron tracking-widest">GO LIVE</span>
+                          <span className="text-[10px] font-bold font-orbitron tracking-widest hidden sm:inline">GO LIVE</span>
                        </button>
                    )}
                </div>
@@ -712,86 +718,159 @@ export default function App() {
                 <button
                   key={speed}
                   onClick={() => setPlaybackSpeed(speed)}
-                  className={`text-[9px] font-bold px-2 h-7 rounded transition-colors uppercase font-exo ${playbackSpeed === speed ? 'bg-[#333] text-white' : 'text-neutral-600 hover:text-neutral-300 hover:bg-[#1a1a1a]'}`}
+                  className={`text-[9px] font-bold px-2 h-7 rounded transition-colors uppercase font-exo hidden sm:block ${playbackSpeed === speed ? 'bg-[#333] text-white' : 'text-neutral-600 hover:text-neutral-300 hover:bg-[#1a1a1a]'}`}
                 >
                   {speed}x
                 </button>
               ))}
            </div>
+
+           {/* Mobile Settings Toggle */}
+           <button 
+             className="md:hidden p-2 text-neutral-400 hover:text-white"
+             onClick={() => setShowMobileSettings(!showMobileSettings)}
+           >
+             {showMobileSettings ? <X size={20} /> : <Settings2 size={20} />}
+           </button>
         </div>
       </header>
 
+      {/* Mobile Settings Panel */}
+      {showMobileSettings && (
+        <div className="absolute top-14 left-0 w-full bg-[#0F0F0F] border-b border-[#222] z-50 p-4 flex flex-col gap-4 shadow-2xl animate-in slide-in-from-top-5 md:hidden">
+             <div className="flex justify-between items-center border-b border-[#222] pb-2">
+                <h3 className="text-xs font-bold text-neutral-400 uppercase tracking-widest font-orbitron flex items-center gap-2">
+                    <Settings2 size={12} className="text-red-600" /> Session Configuration
+                </h3>
+                <button onClick={() => setShowMobileSettings(false)} className="text-neutral-500 hover:text-white"><X size={16} /></button>
+             </div>
+             
+             <div className="grid grid-cols-2 gap-3">
+                 <div className="flex flex-col gap-1">
+                    <label className="text-[9px] font-bold text-neutral-600 uppercase tracking-wider">Season</label>
+                    <select 
+                        className="bg-[#1a1a1a] text-white text-sm font-bold px-3 py-3 rounded border border-[#333] outline-none focus:border-red-600 uppercase"
+                        value={selectedYear}
+                        onChange={e => { setSelectedYear(Number(e.target.value)); }}
+                    >
+                        {AVAILABLE_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+                    </select>
+                 </div>
+                 <div className="flex flex-col gap-1">
+                    <label className="text-[9px] font-bold text-neutral-600 uppercase tracking-wider">Session Type</label>
+                    <select 
+                         className="bg-[#1a1a1a] text-white text-sm font-bold px-3 py-3 rounded border border-[#333] outline-none focus:border-red-600 uppercase truncate"
+                         value={session?.session_key || ''}
+                         onChange={e => {
+                            const s = allSessions.find(s => s.session_key === Number(e.target.value));
+                            if(s) setSession(s);
+                            setShowMobileSettings(false);
+                         }}
+                    >
+                         <option value="">Select Session</option>
+                         {selectedMeetingKey && meetings[selectedMeetingKey]?.sessions.map(s => (
+                           <option key={s.session_key} value={s.session_key}>{s.session_name}</option>
+                         ))}
+                    </select>
+                 </div>
+             </div>
+
+             <div className="flex flex-col gap-1">
+                <label className="text-[9px] font-bold text-neutral-600 uppercase tracking-wider">Grand Prix</label>
+                <select 
+                    className="bg-[#1a1a1a] text-white text-sm font-bold px-3 py-3 rounded border border-[#333] outline-none focus:border-red-600 uppercase"
+                    value={selectedMeetingKey || ''}
+                    onChange={e => { setSelectedMeetingKey(Number(e.target.value)); }}
+                >
+                    <option value="">Select Grand Prix</option>
+                    {Object.keys(meetings).map(k => (
+                        <option key={k} value={k}>{meetings[Number(k)].name}</option>
+                    ))}
+                </select>
+             </div>
+        </div>
+      )}
+
       {/* --- MAIN CONTENT --- */}
-      <main className="flex-1 overflow-hidden p-3 bg-[#0A0A0A]">
+      <main className="flex-1 overflow-hidden p-2 md:p-3 bg-[#0A0A0A] pb-20 md:pb-3 relative z-10">
          {currentView === 'dashboard' ? (
              <div className="flex flex-col lg:flex-row gap-3 h-full">
                 
                 {/* 1. LEFT COLUMN: LEADERBOARD (Broadcast Style) */}
-                {/* Fixed widths for better table stability on large screens */}
-                <div className="w-full lg:w-[380px] xl:w-[450px] shrink-0 h-full min-h-0 flex flex-col transition-all duration-300">
+                {/* Fixed widths for better table stability on large screens, Full width on Mobile */}
+                <div className="w-full lg:w-[380px] xl:w-[450px] shrink-0 h-[40%] lg:h-full min-h-0 flex flex-col transition-all duration-300">
                    <LiveLeaderboard drivers={driversWithDrs} />
                 </div>
 
                 {/* 2. RIGHT COLUMN: MAIN FEED & STATS */}
                 <div className="flex-1 h-full min-h-0 flex flex-col gap-3 min-w-0">
                    
-                   {/* 2a. Session Header Info */}
-                   <div className="bg-[#111] border border-[#222] rounded-lg p-4 flex items-center justify-between shadow-lg shrink-0">
-                      <div className="flex flex-col">
+                   {/* 2a. Session Header Info (Hide on mobile landscape if needed, but keep for now) */}
+                   <div className="bg-[#111] border border-[#222] rounded-lg p-3 md:p-4 flex items-center justify-between shadow-lg shrink-0">
+                      <div className="flex flex-col min-w-0">
                          <div className="flex items-center gap-2 mb-1">
-                            <span className="w-1.5 h-6 bg-red-600 block rounded-sm"></span>
-                            <h1 className="text-2xl font-orbitron font-black uppercase tracking-tight text-white leading-none">
+                            <span className="w-1.5 h-4 md:h-6 bg-red-600 block rounded-sm"></span>
+                            <h1 className="text-lg md:text-2xl font-orbitron font-black uppercase tracking-tight text-white leading-none truncate">
                               {session?.session_name || 'NO SESSION'}
                             </h1>
                          </div>
-                         <div className="text-neutral-500 font-exo font-bold text-sm uppercase tracking-wider pl-3.5">
+                         <div className="text-neutral-500 font-exo font-bold text-xs md:text-sm uppercase tracking-wider pl-3.5 truncate">
                             {session ? `${session.country_name} // ${session.year}` : '---'}
                          </div>
                       </div>
 
-                      <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-2 md:gap-4 ml-4">
                          {/* Lap Counter */}
                          <div className="flex flex-col items-end">
-                            <span className="text-[10px] text-neutral-500 uppercase font-bold tracking-wider font-orbitron">Lap</span>
+                            <span className="text-[8px] md:text-[10px] text-neutral-500 uppercase font-bold tracking-wider font-orbitron">Lap</span>
                             <div className="flex items-baseline gap-1">
-                               <span className="text-3xl font-rajdhani font-bold text-white">{displayLap}</span>
-                               <span className="text-lg font-rajdhani font-medium text-neutral-600">/ {totalLaps || '--'}</span>
+                               <span className="text-xl md:text-3xl font-rajdhani font-bold text-white">{displayLap}</span>
+                               <span className="text-sm md:text-lg font-rajdhani font-medium text-neutral-600">/ {totalLaps || '--'}</span>
                             </div>
                          </div>
                          
-                         <div className="w-px h-10 bg-[#222]"></div>
+                         <div className="w-px h-8 md:h-10 bg-[#222] hidden sm:block"></div>
 
                          {/* Timer */}
-                         <div className="flex flex-col items-end min-w-[100px]">
+                         <div className="flex flex-col items-end min-w-[70px] md:min-w-[100px] hidden sm:flex">
                             <span className="text-[10px] text-neutral-500 uppercase font-bold tracking-wider font-orbitron flex items-center gap-1"><Timer size={10} /> Time</span>
-                            <span className="text-3xl font-rajdhani font-bold text-white tabular-nums">{timeString}</span>
+                            <span className="text-xl md:text-3xl font-rajdhani font-bold text-white tabular-nums">{timeString}</span>
                          </div>
 
                          {/* Status Flag */}
-                         <div className={`h-12 px-6 rounded flex items-center justify-center gap-3 font-orbitron font-bold text-xl uppercase tracking-tighter shadow-inner ${
+                         <div className={`h-8 md:h-12 px-2 md:px-6 rounded flex items-center justify-center gap-2 md:gap-3 font-orbitron font-bold text-sm md:text-xl uppercase tracking-tighter shadow-inner ${
                             trackStatus === 'GREEN' ? 'bg-green-600/10 text-green-500 border border-green-600/30' : 
                             trackStatus === 'RED' ? 'bg-red-600 text-white animate-pulse' : 
                             'bg-yellow-500 text-black animate-pulse'
                          }`}>
-                            <Flag size={20} fill="currentColor" />
+                            <Flag size={16} className="md:w-5 md:h-5" fill="currentColor" />
+                            <span className="hidden sm:inline">
                             {trackStatus === 'SC' ? 'SAFETY CAR' : 
                              trackStatus === 'VSC' ? 'VIRTUAL SC' : 
                              trackStatus === 'RED' ? 'RED FLAG' : 
                              trackStatus === 'YELLOW' ? 'YELLOW FLAG' : 'GREEN'}
+                            </span>
+                            {/* Mobile Abbr */}
+                            <span className="sm:hidden">
+                            {trackStatus === 'SC' ? 'SC' : 
+                             trackStatus === 'VSC' ? 'VSC' : 
+                             trackStatus === 'RED' ? 'RED' : 
+                             trackStatus === 'YELLOW' ? 'YEL' : 'GRN'}
+                            </span>
                          </div>
                       </div>
                    </div>
 
                    {/* 2b. Main Content Split */}
-                   <div className="flex-1 min-h-0 grid grid-rows-12 gap-3">
-                      {/* Incident Feed - Taking up most space */}
-                      <div className="row-span-8 bg-[#111] border border-[#222] rounded-lg overflow-hidden flex flex-col shadow-lg relative">
+                   <div className="flex-1 min-h-0 flex flex-col md:grid md:grid-rows-12 gap-3">
+                      {/* Incident Feed */}
+                      <div className="flex-1 md:row-span-8 bg-[#111] border border-[#222] rounded-lg overflow-hidden flex flex-col shadow-lg relative min-h-[150px]">
                          <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-red-600 to-transparent opacity-50"></div>
                          <IncidentFeed messages={messages} />
                       </div>
                       
                       {/* Weather & Tire Stats */}
-                      <div className="row-span-4 bg-[#111] border border-[#222] rounded-lg overflow-hidden shadow-lg">
+                      <div className="h-24 md:row-span-4 md:h-auto bg-[#111] border border-[#222] rounded-lg overflow-hidden shadow-lg shrink-0">
                          <WeatherWidget weather={weather} />
                       </div>
                    </div>
@@ -801,12 +880,14 @@ export default function App() {
          ) : currentView === 'telemetry' ? (
             // TELEMETRY VIEW
             session && currentReplayTime ? (
-               <TelemetryDashboard 
-                 sessionKey={session.session_key} 
-                 currentTime={currentReplayTime} 
-                 drivers={drivers}
-                 isPlaying={isPlaying}
-               />
+               <div className="h-full overflow-y-auto lg:overflow-hidden">
+                   <TelemetryDashboard 
+                     sessionKey={session.session_key} 
+                     currentTime={currentReplayTime} 
+                     drivers={drivers}
+                     isPlaying={isPlaying}
+                   />
+               </div>
             ) : (
                 <div className="w-full h-full flex items-center justify-center flex-col gap-4 text-neutral-600 font-exo">
                    <Activity size={48} className="opacity-20" />
@@ -830,6 +911,31 @@ export default function App() {
             )
          )}
       </main>
+
+      {/* --- BOTTOM NAVIGATION (MOBILE ONLY) --- */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-[#111] border-t border-[#222] flex items-center justify-around z-50 pb-safe">
+         <button 
+           onClick={() => setCurrentView('dashboard')}
+           className={`flex flex-col items-center gap-1 p-2 ${currentView === 'dashboard' ? 'text-white' : 'text-neutral-600'}`}
+         >
+           <LayoutDashboard size={20} className={currentView === 'dashboard' ? 'stroke-red-600' : ''} />
+           <span className="text-[10px] font-bold font-exo uppercase tracking-wide">Dash</span>
+         </button>
+         <button 
+           onClick={() => setCurrentView('telemetry')}
+           className={`flex flex-col items-center gap-1 p-2 ${currentView === 'telemetry' ? 'text-white' : 'text-neutral-600'}`}
+         >
+           <Activity size={20} className={currentView === 'telemetry' ? 'stroke-red-600' : ''} />
+           <span className="text-[10px] font-bold font-exo uppercase tracking-wide">Data</span>
+         </button>
+         <button 
+           onClick={() => setCurrentView('circuit')}
+           className={`flex flex-col items-center gap-1 p-2 ${currentView === 'circuit' ? 'text-white' : 'text-neutral-600'}`}
+         >
+           <MapIcon size={20} className={currentView === 'circuit' ? 'stroke-red-600' : ''} />
+           <span className="text-[10px] font-bold font-exo uppercase tracking-wide">Map</span>
+         </button>
+      </nav>
     </div>
   );
 }

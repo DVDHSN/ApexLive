@@ -5,6 +5,8 @@ import { ZoomIn, ZoomOut, Maximize, Target } from 'lucide-react';
 interface TrackMapProps {
   drivers: Driver[];
   trackPath: string | null;
+  sectorPaths?: { s1: string, s2: string, s3: string } | null;
+  activeSector?: 1 | 2 | 3 | null;
   playbackSpeed: number;
   driverCoordinates?: Record<string, {x: number, y: number}>;
   startLineCoordinates?: {x: number, y: number} | null;
@@ -15,7 +17,9 @@ interface TrackMapProps {
 
 const TrackMap: React.FC<TrackMapProps> = ({ 
   drivers, 
-  trackPath, 
+  trackPath,
+  sectorPaths,
+  activeSector, 
   playbackSpeed, 
   driverCoordinates, 
   startLineCoordinates, 
@@ -39,7 +43,6 @@ const TrackMap: React.FC<TrackMapProps> = ({
   }, [followedDriverId, onDriverFollowed]);
 
   // Auto-follow logic
-  // CRITICAL: This hook must be before any conditional returns
   useEffect(() => {
     if (followedDriverId && driverCoordinates && mapTransform) {
         const coords = driverCoordinates[followedDriverId];
@@ -50,7 +53,6 @@ const TrackMap: React.FC<TrackMapProps> = ({
              
              // Center the view on the driver
              // Target SVG Center is 400,400
-             // Formula: TranslateX = CenterX - (ObjectX * Scale)
              setTransform(prev => ({
                  ...prev,
                  x: 400 - (cx * prev.k),
@@ -144,10 +146,28 @@ const TrackMap: React.FC<TrackMapProps> = ({
   const followedDriver = drivers.find(d => d.id === followedDriverId);
   const activeDrivers = drivers.filter(d => d.status !== 'OUT');
 
+  // Sector Color helper
+  const getSectorColor = (sectorNum: number) => {
+      if (!followedDriverId) return '#333'; // Default track color
+      if (activeSector === sectorNum) return '#FACC15'; // Highlight (Yellow-400)
+      return '#333'; // Dimmed
+  };
+  
+  const getSectorOpacity = (sectorNum: number) => {
+      if (!followedDriverId) return 1;
+      if (activeSector === sectorNum) return 1;
+      return 0.3;
+  };
+  
+  const getSectorWidth = (sectorNum: number) => {
+      if (followedDriverId && activeSector === sectorNum) return 8 / transform.k;
+      return 6 / transform.k;
+  }
+
   return (
     <div 
       ref={containerRef}
-      className="relative w-full h-full bg-[#1E1E1E] overflow-hidden cursor-move group select-none"
+      className="relative w-full h-full bg-[#1E1E1E] overflow-hidden cursor-move group select-none touch-none"
       onWheel={handleWheel}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
@@ -176,7 +196,7 @@ const TrackMap: React.FC<TrackMapProps> = ({
 
       {/* Driver Telemetry HUD (Overlay) */}
       {followedDriver && driverTelemetry && (
-        <div className="absolute bottom-20 left-1/2 -translate-x-1/2 bg-[#0A0A0A]/90 backdrop-blur-md border border-neutral-700/50 p-4 rounded-lg shadow-2xl flex items-center gap-6 z-40 pointer-events-none min-w-[280px] justify-center">
+        <div className="absolute bottom-20 sm:bottom-8 left-1/2 -translate-x-1/2 bg-[#0A0A0A]/90 backdrop-blur-md border border-neutral-700/50 p-4 rounded-lg shadow-2xl flex items-center gap-6 z-40 pointer-events-none min-w-[280px] justify-center">
              {/* Speed */}
              <div className="flex flex-col items-center">
                  <span className="text-[9px] text-neutral-500 uppercase font-bold tracking-widest mb-1">Speed</span>
@@ -211,16 +231,16 @@ const TrackMap: React.FC<TrackMapProps> = ({
         </div>
       )}
 
-      {/* Zoom Controls */}
-      <div className="absolute bottom-4 right-4 z-20 flex flex-col gap-2">
-         <button onClick={(e) => { e.stopPropagation(); setFollowedDriverId(null); setTransform(t => ({...t, k: Math.min(t.k * 1.5, 15)}))}} className="p-2 bg-[#222] border border-[#333] text-neutral-400 hover:text-white hover:bg-[#333] rounded shadow-lg transition-colors">
-            <ZoomIn size={16} />
+      {/* Zoom Controls (Mobile Friendly) */}
+      <div className="absolute bottom-24 sm:bottom-4 right-4 z-20 flex flex-col gap-2">
+         <button onClick={(e) => { e.stopPropagation(); setFollowedDriverId(null); setTransform(t => ({...t, k: Math.min(t.k * 1.5, 15)}))}} className="p-3 sm:p-2 bg-[#222] border border-[#333] text-neutral-400 hover:text-white hover:bg-[#333] rounded shadow-lg transition-colors">
+            <ZoomIn size={20} />
          </button>
-         <button onClick={(e) => { e.stopPropagation(); setFollowedDriverId(null); setTransform(t => ({...t, k: Math.max(t.k / 1.5, 0.5)}))}} className="p-2 bg-[#222] border border-[#333] text-neutral-400 hover:text-white hover:bg-[#333] rounded shadow-lg transition-colors">
-            <ZoomOut size={16} />
+         <button onClick={(e) => { e.stopPropagation(); setFollowedDriverId(null); setTransform(t => ({...t, k: Math.max(t.k / 1.5, 0.5)}))}} className="p-3 sm:p-2 bg-[#222] border border-[#333] text-neutral-400 hover:text-white hover:bg-[#333] rounded shadow-lg transition-colors">
+            <ZoomOut size={20} />
          </button>
-         <button onClick={(e) => { e.stopPropagation(); resetView(); }} className="p-2 bg-[#222] border border-[#333] text-neutral-400 hover:text-white hover:bg-[#333] rounded shadow-lg transition-colors" title="Reset View">
-            <Maximize size={16} />
+         <button onClick={(e) => { e.stopPropagation(); resetView(); }} className="p-3 sm:p-2 bg-[#222] border border-[#333] text-neutral-400 hover:text-white hover:bg-[#333] rounded shadow-lg transition-colors" title="Reset View">
+            <Maximize size={20} />
          </button>
       </div>
 
@@ -248,28 +268,37 @@ const TrackMap: React.FC<TrackMapProps> = ({
             transform={`translate(${transform.x}, ${transform.y}) scale(${transform.k})`} 
             className={`pointer-events-auto ${followedDriverId ? 'transition-transform duration-300 ease-linear' : ''}`}
         >
-            {/* Track Outline (Glow) */}
+            {/* Track Glow */}
             <path
               d={trackPath}
               fill="none"
-              stroke="#DC2626"
+              stroke={followedDriverId ? '#FACC15' : '#DC2626'}
               strokeWidth={14 / transform.k} 
-              strokeOpacity="0.1"
+              strokeOpacity={followedDriverId ? '0.05' : '0.1'}
               strokeLinecap="round"
               strokeLinejoin="round"
               filter="blur(4px)"
             />
-            {/* Main Track */}
-            <path
-              d={trackPath}
-              fill="none"
-              stroke="#333"
-              strokeWidth={6 / transform.k}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              id="raceTrack"
-            />
-            {/* Track Highlight */}
+
+            {/* SECTOR PATHS (On top of base if available) */}
+            {sectorPaths ? (
+                <>
+                    <path d={sectorPaths.s1} fill="none" stroke={getSectorColor(1)} strokeWidth={getSectorWidth(1)} strokeOpacity={getSectorOpacity(1)} strokeLinecap="round" strokeLinejoin="round" />
+                    <path d={sectorPaths.s2} fill="none" stroke={getSectorColor(2)} strokeWidth={getSectorWidth(2)} strokeOpacity={getSectorOpacity(2)} strokeLinecap="round" strokeLinejoin="round" />
+                    <path d={sectorPaths.s3} fill="none" stroke={getSectorColor(3)} strokeWidth={getSectorWidth(3)} strokeOpacity={getSectorOpacity(3)} strokeLinecap="round" strokeLinejoin="round" />
+                </>
+            ) : (
+                <path
+                    d={trackPath}
+                    fill="none"
+                    stroke="#333"
+                    strokeWidth={6 / transform.k}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                />
+            )}
+
+            {/* Track Highlight (Centerline thin) */}
             <path
               d={trackPath}
               fill="none"
