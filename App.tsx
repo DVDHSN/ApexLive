@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Driver, RaceControlMessage, TelemetryData, ChatMessage, OpenF1Session, WeatherData, TireCompound } from './types';
 import LiveLeaderboard from './components/LiveLeaderboard';
-import TrackMap from './components/TrackMap';
 import TelemetryDashboard from './components/TelemetryDashboard';
+import LiveCircuit from './components/LiveCircuit';
 import { IncidentFeed, WeatherWidget } from './components/DashboardWidgets';
 import { 
   getSessions, 
@@ -25,7 +25,10 @@ import {
   Zap,
   LayoutDashboard,
   Activity,
-  Radio
+  Radio,
+  Timer,
+  Flag,
+  Map as MapIcon
 } from 'lucide-react';
 
 const AVAILABLE_YEARS = [2025, 2024, 2023];
@@ -43,7 +46,7 @@ const formatLapTime = (seconds: number | string): string => {
 
 export default function App() {
   // Navigation State
-  const [currentView, setCurrentView] = useState<'dashboard' | 'telemetry'>('dashboard');
+  const [currentView, setCurrentView] = useState<'dashboard' | 'telemetry' | 'circuit'>('dashboard');
 
   // Selection State
   const [selectedYear, setSelectedYear] = useState(2025);
@@ -57,11 +60,6 @@ export default function App() {
   const [messages, setMessages] = useState<RaceControlMessage[]>([]);
   const [weather, setWeather] = useState<WeatherData | null>(null);
   
-  // Track Map State
-  const [trackPath, setTrackPath] = useState<string | null>(null);
-  const [mapTransform, setMapTransform] = useState<{ minX: number, minY: number, scale: number, offsetX: number, offsetY: number } | null>(null);
-  const [driverCoordinates, setDriverCoordinates] = useState<Record<string, {x: number, y: number}>>({});
-
   // Race Status State
   const [trackStatus, setTrackStatus] = useState<'GREEN' | 'YELLOW' | 'SC' | 'VSC' | 'RED'>('GREEN');
   const [drsEnabled, setDrsEnabled] = useState(false);
@@ -85,6 +83,8 @@ export default function App() {
 
   // Ref to track current time inside interval without re-triggering effect
   const replayTimeRef = useRef<Date | null>(null);
+  // Guard to prevent overlapping data fetches
+  const isFetchingRef = useRef(false);
   
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const loopCounterRef = useRef(0);
@@ -101,15 +101,12 @@ export default function App() {
     if (!session || !currentReplayTime) return;
 
     // A session is "Live" if the current real time is before the scheduled end time
-    // Note: OpenF1 sessions have date_end, but sometimes it runs over. We add 2 hours buffer to be safe.
     const now = new Date();
     const end = new Date(session.date_end);
-    // Rough check: is it happening today and within the window?
     const isLive = now >= new Date(session.date_start) && now <= new Date(end.getTime() + 1000 * 60 * 60 * 2);
     setIsSessionLive(isLive);
 
     // Are we at the "Head" of the live stream? (within 60s of real time)
-    // OpenF1 has a slight delay, so "Real Time" is usually ~10-20s behind wall clock
     const diff = Math.abs(now.getTime() - currentReplayTime.getTime());
     const atHead = diff < 60 * 1000; // 60 seconds
     setIsAtLiveHead(atHead);
@@ -124,19 +121,20 @@ export default function App() {
   const fetchDataForTime = useCallback(async (time: Date, signal: AbortSignal, isThrottledUpdate: boolean = false) => {
       if (!session) return;
       
-      const isoTime = time.toISOString();
-      const windowSeconds = 2; // Standard window
-
+      // FIX: Look at the immediate PAST ([T-1.2s, T]) instead of future to ensure accuracy
+      // This ensures we only render what has definitively happened.
+      const windowSeconds = 1.2; 
+      const fetchTime = new Date(time.getTime() - (windowSeconds * 1000));
+      const isoTime = fetchTime.toISOString();
+      
       try {
         const promises: Promise<any>[] = [
            getPositionsAtTime(session.session_key, isoTime, windowSeconds, signal), 
-           getIntervalsAtTime(session.session_key, isoTime, windowSeconds * 2, signal),
-           // Fetch Locations for real-time map visualization (smaller window for precision)
-           getLocationsAtTime(session.session_key, isoTime, 1.5, signal)
+           getIntervalsAtTime(session.session_key, isoTime, windowSeconds, signal),
         ];
         
         // Only fetch weather occasionally or on forced updates (seek)
-        if (!isThrottledUpdate || loopCounterRef.current % 30 === 0) {
+        if (!isThrottledUpdate || loopCounterRef.current % 300 === 0) {
            promises.push(getWeather(session.session_key, isoTime, windowSeconds, signal));
         }
   
@@ -144,41 +142,31 @@ export default function App() {
         
         if (signal.aborted) return;
   
-        const positions = results[0];
-        const intervals = results[1];
-        const locations = results[2];
-        // Weather is the last item if fetched
-        const weatherData = (!isThrottledUpdate || loopCounterRef.current % 30 === 0) ? results[3] : null;
+        // SORTING IS CRITICAL for correctness when multiple packets arrive
+        const positions = results[0].sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
+        const intervals = results[1].sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
+        const weatherData = (!isThrottledUpdate || loopCounterRef.current % 300 === 0) ? results[2] : null;
         
         if (weatherData && weatherData.length > 0) {
            setWeather(weatherData[weatherData.length - 1]);
         }
-        
-        // Update Driver Coordinates Map
-        if (locations && locations.length > 0) {
-           const newCoords: Record<string, {x: number, y: number}> = {};
-           locations.forEach((loc: any) => {
-              // We want the latest coordinate per driver in this window
-              newCoords[loc.driver_number] = { x: loc.x, y: loc.y };
-           });
-           setDriverCoordinates(prev => ({ ...prev, ...newCoords }));
-        }
 
         setDrivers(prev => {
-          const newDrivers = [...prev];
+          // CRITICAL FIX: Create a shallow copy of objects to avoid mutating state directly
+          const newDrivers = prev.map(d => ({ ...d }));
           
           positions.forEach((pos: any) => {
-            const idx = newDrivers.findIndex(d => d.id === pos.driver_number.toString());
-            if (idx !== -1) {
-              newDrivers[idx].position = pos.position;
+            const driver = newDrivers.find(d => d.id === pos.driver_number.toString());
+            if (driver) {
+              driver.position = pos.position;
             }
           });
   
           intervals.forEach((int: any) => {
-            const idx = newDrivers.findIndex(d => d.id === int.driver_number.toString());
-            if (idx !== -1) {
-              if (int.gap_to_leader !== null) newDrivers[idx].gapToLeader = parseFloat(int.gap_to_leader);
-              if (int.interval !== null) newDrivers[idx].interval = parseFloat(int.interval);
+            const driver = newDrivers.find(d => d.id === int.driver_number.toString());
+            if (driver) {
+              if (int.gap_to_leader !== null && int.gap_to_leader !== undefined) driver.gapToLeader = parseFloat(int.gap_to_leader);
+              if (int.interval !== null && int.interval !== undefined) driver.interval = parseFloat(int.interval);
             }
           });
           
@@ -207,7 +195,6 @@ export default function App() {
                         setCompletedLaps(lastLap.lap_number);
                       }
                   } else {
-                     // If no laps completed, might be lap 1
                      currentLapNumber = 1; 
                   }
 
@@ -232,12 +219,19 @@ export default function App() {
           newDrivers.forEach(d => {
              if (retiredDrivers.has(d.id)) {
                  d.status = 'OUT';
+                 d.interval = 0; // Clear interval for DNF
+                 d.gapToLeader = 0;
+             } else {
+                 d.status = 'ACTIVE';
              }
           });
   
           return newDrivers.sort((a, b) => {
+             // Put retired drivers at the bottom
              if (a.status === 'OUT' && b.status !== 'OUT') return 1;
              if (a.status !== 'OUT' && b.status === 'OUT') return -1;
+             
+             // Sort by position
              const posA = a.position === 0 ? 999 : a.position;
              const posB = b.position === 0 ? 999 : b.position;
              return posA - posB;
@@ -256,14 +250,8 @@ export default function App() {
       setSession(null);
       setDrivers([]);
       setSelectedMeetingKey(null);
-      setTrackPath(null);
-      setMapTransform(null);
       setSessionStartTime(null);
       setSessionEndTime(null);
-      
-      const controller = new AbortController();
-      // We pass null signal here as we want to let this finish usually, 
-      // but in a real app we might pass signal.
       
       const sessions = await getSessions(selectedYear);
       setAllSessions(sessions);
@@ -319,14 +307,11 @@ export default function App() {
       setMessages([]);
       setTrackStatus('GREEN');
       setDrsEnabled(false);
-      setTrackPath(null);
-      setMapTransform(null);
       setCompletedLaps(0);
       setTotalLaps(0);
       setRetiredDrivers(new Set());
       sessionLapsRef.current = [];
       sessionStintsRef.current = [];
-      setDriverCoordinates({});
       
       const driverList = await getSessionDrivers(session.session_key);
       if (controller.signal.aborted) return;
@@ -350,25 +335,24 @@ export default function App() {
       
       if (lap1s.length > 0) {
         lap1s.sort((a: any, b: any) => new Date(a.date_start).getTime() - new Date(b.date_start).getTime());
-        const raceStart = new Date(lap1s[0].date_start);
-        // Do NOT add offset here to ensure we start at the grid/start line
-        raceStart.setSeconds(raceStart.getSeconds() + 0); 
-        startTime = raceStart;
+        startTime = new Date(lap1s[0].date_start);
       } else {
         startTime.setMinutes(startTime.getMinutes() + 5);
       }
 
-      const endTime = new Date(session.date_end);
+      // Extend session end time by 20 minutes
+      const endTime = new Date(new Date(session.date_end).getTime() + 20 * 60000);
+      
       setSessionStartTime(startTime);
       setSessionEndTime(endTime);
 
       setCurrentReplayTime(startTime);
       replayTimeRef.current = startTime;
 
-      const initialIntervals = await getHistoricalIntervals(session.session_key, startTime.toISOString(), 120);
+      // Look back further for grid positions (10 mins)
+      const initialPositions = await getHistoricalPositions(session.session_key, startTime.toISOString(), 600);
+      const initialIntervals = await getHistoricalIntervals(session.session_key, startTime.toISOString(), 60);
       
-      // Look back 5 minutes to find grid positions, and SORT them to get the latest update per driver
-      const initialPositions = await getHistoricalPositions(session.session_key, startTime.toISOString(), 300);
       if (initialPositions && Array.isArray(initialPositions)) {
           initialPositions.sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
       }
@@ -376,116 +360,72 @@ export default function App() {
       if (controller.signal.aborted) return;
 
       setDrivers(prev => {
-        const next = [...prev];
+        const next = prev.map(d => ({...d}));
+        // Apply historical positions
         initialPositions.forEach((pos: any) => {
-           const idx = next.findIndex(d => d.id === pos.driver_number.toString());
-           if (idx !== -1) {
-             next[idx].position = pos.position;
+           const d = next.find(d => d.id === pos.driver_number.toString());
+           if (d) {
+             d.position = pos.position;
            }
         });
 
         initialIntervals.forEach((int: any) => {
-           const idx = next.findIndex(d => d.id === int.driver_number.toString());
-           if (idx !== -1) {
-              if (int.gap_to_leader !== null) next[idx].gapToLeader = parseFloat(int.gap_to_leader);
-              if (int.interval !== null) next[idx].interval = parseFloat(int.interval);
+           const d = next.find(d => d.id === int.driver_number.toString());
+           if (d) {
+              if (int.gap_to_leader !== null) d.gapToLeader = parseFloat(int.gap_to_leader);
+              if (int.interval !== null) d.interval = parseFloat(int.interval);
            }
         });
 
-        const leaderIdx = next.findIndex(d => d.position === 1);
-        if (leaderIdx !== -1) {
-            next[leaderIdx].gapToLeader = 0;
-            next[leaderIdx].interval = 0;
+        const leader = next.find(d => d.position === 1);
+        if (leader) {
+            leader.gapToLeader = 0;
+            leader.interval = 0;
         }
 
         return next.sort((a, b) => (a.position || 999) - (b.position || 999));
       });
 
       setIsPlaying(true);
-
-      // Generate Track Map
-      const validLapsForMap = allLaps.filter((l: any) => 
-          l.lap_duration && 
-          l.lap_duration < 200 && 
-          l.lap_duration > 40
-      );
-      validLapsForMap.sort((a: any, b: any) => a.lap_duration - b.lap_duration);
-      const referenceLap = validLapsForMap[0] || allLaps.find((l:any) => l.lap_number === 2);
-
-      if (referenceLap && referenceLap.date_start) {
-         const duration = referenceLap.lap_duration || 100;
-         const mapStartDate = new Date(referenceLap.date_start).toISOString();
-         const mapEndDate = new Date(new Date(referenceLap.date_start).getTime() + ((duration + 2) * 1000)).toISOString();
-
-         const locations = await getLocations(
-           session.session_key, 
-           referenceLap.driver_number, 
-           mapStartDate, 
-           mapEndDate
-         );
-
-         if (locations.length > 0) {
-           let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-           locations.forEach((pt: any) => {
-             if (pt.x < minX) minX = pt.x;
-             if (pt.x > maxX) maxX = pt.x;
-             if (pt.y < minY) minY = pt.y;
-             if (pt.y > maxY) maxY = pt.y;
-           });
-
-           const rangeX = maxX - minX;
-           const rangeY = maxY - minY;
-           const padding = 40;
-           // SVG Viewbox is 800x800
-           const scaleX = (800 - padding * 2) / rangeX;
-           const scaleY = (800 - padding * 2) / rangeY;
-           const scale = Math.min(scaleX, scaleY);
-           const offsetX = (800 - rangeX * scale) / 2;
-           const offsetY = (800 - rangeY * scale) / 2;
-
-           const d = locations.map((pt: any, i: number) => {
-              const x = (pt.x - minX) * scale + offsetX;
-              const y = 800 - ((pt.y - minY) * scale + offsetY); // Invert Y for SVG
-              return `${i === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`;
-           }).join(' ');
-
-           setTrackPath(`${d} Z`);
-           setMapTransform({ minX, minY, scale, offsetX, offsetY });
-         }
-      }
     };
 
     initSession();
     return () => controller.abort();
   }, [session]);
 
-  // 3. Playback Loop with AbortController for Clean Pause
+  // 3. Playback Loop
   useEffect(() => {
     if (!isPlaying || !session) return;
 
-    // Create an AbortController for this run.
     const controller = new AbortController();
     const signal = controller.signal;
 
     const tick = async () => {
       if (!replayTimeRef.current) return;
 
-      const stepSeconds = 1 * playbackSpeed;
-      const nextTime = new Date(replayTimeRef.current.getTime() + (stepSeconds * 1000));
+      const updateIntervalMs = 100;
+      const raceTimeDeltaSeconds = playbackSpeed * (updateIntervalMs / 1000);
       
-      // Update ref immediately
+      const nextTime = new Date(replayTimeRef.current.getTime() + (raceTimeDeltaSeconds * 1000));
+      
       replayTimeRef.current = nextTime;
       setCurrentReplayTime(nextTime);
 
       loopCounterRef.current += 1;
       
-      // Use shared fetch function (throttled updates = true)
-      await fetchDataForTime(nextTime, signal, true);
+      // Fetch data every 1 real second
+      if (loopCounterRef.current % 10 === 0) {
+          if (!isFetchingRef.current) {
+             isFetchingRef.current = true;
+             fetchDataForTime(nextTime, signal, true)
+                .finally(() => {
+                   isFetchingRef.current = false;
+                });
+          }
+      }
     };
 
-    const id = setInterval(tick, 1000); // 1 real second
-    
-    // Cleanup: Stop interval AND abort any pending fetch
+    const id = setInterval(tick, 100); 
     return () => {
       clearInterval(id);
       controller.abort();
@@ -507,27 +447,38 @@ export default function App() {
         timestamp: new Date(m.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
         message: m.message,
         flag: m.flag,
-        type: 'INFO'
+        type: 'INFO',
+        driver_number: m.driver_number
       }));
       setMessages(formattedMsgs);
 
       if (formattedMsgs.length > 0) {
-        // --- PARSE RETIREMENTS ---
         const newRetired = new Set(retiredDrivers);
         let retiredChanged = false;
 
         formattedMsgs.forEach((msg: any) => {
            const text = msg.message.toUpperCase();
-           // Only mark as OUT if explicitly retired or DNF
-           // 'STOPPED' is removed to avoid false positives (e.g. spins, red flag stops)
-           // Regex looks for "RETIRED", "DNF", or "OUT" followed by a number with optional "CAR/NO/DRIVER" prefix
-           if (text.includes('RETIRED') || text.includes('DNF')) {
-              const match = text.match(/(?:CAR|NO|DRIVER)?\s*(\d+)/);
-              if (match && match[1]) {
-                 if (!newRetired.has(match[1])) {
-                    newRetired.add(match[1]);
-                    retiredChanged = true;
+           // Enhanced Retirement Detection
+           if (text.includes('RETIRED') || text.includes('DNF') || text.includes('STOPPED') || text.includes('WITHDRAWN')) {
+              // Extract Driver Number from text or msg object
+              let targetId = null;
+              if (msg.driver_number) {
+                 targetId = msg.driver_number.toString();
+              } else {
+                 // Try to match "Car 14", "No. 14", "Driver 14"
+                 const numberMatch = text.match(/(?:CAR|NO\.?|DRIVER)\s*(\d+)/i);
+                 if (numberMatch && numberMatch[1]) {
+                    targetId = numberMatch[1];
                  }
+              }
+
+              // Verify this is a valid driver in our session
+              if (targetId) {
+                  const isValidDriver = drivers.some(d => d.id === targetId);
+                  if (isValidDriver && !newRetired.has(targetId)) {
+                      newRetired.add(targetId);
+                      retiredChanged = true;
+                  }
               }
            }
         });
@@ -567,16 +518,53 @@ export default function App() {
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const timestamp = Number(e.target.value);
     const newTime = new Date(timestamp);
-    setIsPlaying(false); // Pause while dragging
+    setIsPlaying(false); 
     setCurrentReplayTime(newTime);
     replayTimeRef.current = newTime;
   };
 
   const handleSeekCommit = async () => {
-     if (replayTimeRef.current) {
-         // Trigger a fetch for the new time immediately
-         const controller = new AbortController();
-         await fetchDataForTime(replayTimeRef.current, controller.signal, false);
+     if (replayTimeRef.current && session) {
+        const isoTime = replayTimeRef.current.toISOString();
+        const controller = new AbortController();
+
+        const [positions, intervals] = await Promise.all([
+             getHistoricalPositions(session.session_key, isoTime, 300),
+             getHistoricalIntervals(session.session_key, isoTime, 120)
+        ]);
+        
+        // Fix: Sort historical data by date to ensure we apply the state in correct order
+        if (positions) positions.sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
+        
+        const posMap = new Map();
+        positions.forEach((p: any) => posMap.set(p.driver_number.toString(), p.position));
+
+        const intMap = new Map();
+        intervals.forEach((i: any) => {
+            intMap.set(i.driver_number.toString(), {
+                gap: i.gap_to_leader,
+                int: i.interval
+            });
+        });
+
+        setDrivers(prev => {
+            const next = prev.map(d => ({ ...d })); // Immutable map
+            next.forEach(d => {
+                const newPos = posMap.get(d.id);
+                const newInt = intMap.get(d.id);
+
+                if (newPos !== undefined) d.position = newPos;
+                if (newInt?.gap !== undefined && newInt.gap !== null) d.gapToLeader = parseFloat(newInt.gap);
+                if (newInt?.int !== undefined && newInt.int !== null) d.interval = parseFloat(newInt.int);
+                
+                d.currentSector1 = 0;
+                d.currentSector2 = 0;
+                d.currentSector3 = 0;
+            });
+            return next.sort((a, b) => (a.position || 999) - (b.position || 999));
+        });
+
+        await fetchDataForTime(replayTimeRef.current, controller.signal, false);
      }
   };
 
@@ -600,39 +588,43 @@ export default function App() {
   const displayLap = completedLaps >= totalLaps ? totalLaps : completedLaps + 1;
 
   return (
-    <div className="flex flex-col h-screen bg-[#121212] text-neutral-200 overflow-hidden font-exo selection:bg-red-600 selection:text-white">
+    <div className="flex flex-col h-screen bg-[#0A0A0A] text-neutral-200 overflow-hidden font-exo selection:bg-red-600 selection:text-white">
       
       {/* --- HEADER --- */}
-      <header className="shrink-0 h-16 bg-[#121212] border-b border-[#2A2A2A] flex items-center justify-between px-6 z-20 shadow-md">
+      <header className="shrink-0 h-14 bg-[#111] border-b border-[#222] flex items-center justify-between px-4 z-20 shadow-lg relative">
         <div className="flex items-center gap-6">
-           <div className="font-orbitron font-bold text-2xl tracking-tight flex items-center gap-1">
-             <span className="text-red-600 italic">Apex</span><span className="text-white">Live</span>
+           <div className="font-orbitron font-black text-xl tracking-tighter flex items-center gap-1 select-none">
+             <span className="text-red-600 italic">APEX</span><span className="text-white">LIVE</span>
            </div>
            
-           <div className="h-6 w-px bg-[#333]"></div>
+           <div className="h-4 w-px bg-[#333]"></div>
 
-           {/* View Navigation */}
-           <div className="flex bg-[#1E1E1E] rounded-lg p-1 border border-[#333] gap-1 hidden md:flex">
+           <div className="flex gap-1 hidden md:flex">
              <button 
                onClick={() => setCurrentView('dashboard')}
-               className={`flex items-center gap-2 px-3 py-1 rounded text-xs font-bold font-exo uppercase transition-colors ${currentView === 'dashboard' ? 'bg-[#333] text-white' : 'text-neutral-500 hover:text-white'}`}
+               className={`flex items-center gap-2 px-3 py-1.5 rounded text-[10px] font-bold font-exo uppercase tracking-wider transition-all ${currentView === 'dashboard' ? 'bg-[#222] text-white border border-[#333]' : 'text-neutral-500 hover:text-white border border-transparent'}`}
              >
-               <LayoutDashboard size={14} /> Dashboard
+               <LayoutDashboard size={12} /> Dashboard
              </button>
              <button 
                onClick={() => setCurrentView('telemetry')}
-               className={`flex items-center gap-2 px-3 py-1 rounded text-xs font-bold font-exo uppercase transition-colors ${currentView === 'telemetry' ? 'bg-[#333] text-white' : 'text-neutral-500 hover:text-white'}`}
+               className={`flex items-center gap-2 px-3 py-1.5 rounded text-[10px] font-bold font-exo uppercase tracking-wider transition-all ${currentView === 'telemetry' ? 'bg-[#222] text-white border border-[#333]' : 'text-neutral-500 hover:text-white border border-transparent'}`}
              >
-               <Activity size={14} /> Telemetry
+               <Activity size={12} /> Telemetry
+             </button>
+             <button 
+               onClick={() => setCurrentView('circuit')}
+               className={`flex items-center gap-2 px-3 py-1.5 rounded text-[10px] font-bold font-exo uppercase tracking-wider transition-all ${currentView === 'circuit' ? 'bg-[#222] text-white border border-[#333]' : 'text-neutral-500 hover:text-white border border-transparent'}`}
+             >
+               <MapIcon size={12} /> Circuit
              </button>
            </div>
            
-           <div className="h-6 w-px bg-[#333] hidden md:block"></div>
+           <div className="h-4 w-px bg-[#333] hidden md:block"></div>
 
-           {/* Session Controls */}
            <div className="flex items-center gap-2 font-exo">
               <select 
-                className="bg-[#1E1E1E] text-neutral-300 text-sm font-semibold px-3 py-1.5 rounded border border-[#333] outline-none focus:border-red-600 transition-colors uppercase max-w-[80px] sm:max-w-none"
+                className="bg-[#111] text-neutral-300 text-xs font-bold px-2 py-1 rounded border border-[#333] outline-none focus:border-red-600 transition-colors uppercase cursor-pointer hover:bg-[#1a1a1a]"
                 value={selectedYear}
                 onChange={e => setSelectedYear(Number(e.target.value))}
               >
@@ -640,7 +632,7 @@ export default function App() {
               </select>
               
               <select 
-                className="bg-[#1E1E1E] text-neutral-300 text-sm font-semibold px-3 py-1.5 rounded border border-[#333] outline-none focus:border-red-600 transition-colors max-w-[120px] sm:max-w-[200px] uppercase truncate"
+                className="bg-[#111] text-neutral-300 text-xs font-bold px-2 py-1 rounded border border-[#333] outline-none focus:border-red-600 transition-colors max-w-[200px] uppercase truncate cursor-pointer hover:bg-[#1a1a1a]"
                 value={selectedMeetingKey || ''}
                 onChange={e => setSelectedMeetingKey(Number(e.target.value))}
               >
@@ -651,7 +643,7 @@ export default function App() {
               </select>
               
               <select 
-                 className="bg-[#1E1E1E] text-neutral-300 text-sm font-semibold px-3 py-1.5 rounded border border-[#333] outline-none focus:border-red-600 transition-colors hidden xl:block uppercase"
+                 className="bg-[#111] text-neutral-300 text-xs font-bold px-2 py-1 rounded border border-[#333] outline-none focus:border-red-600 transition-colors hidden xl:block uppercase cursor-pointer hover:bg-[#1a1a1a]"
                  value={session?.session_key || ''}
                  onChange={e => {
                     const s = allSessions.find(s => s.session_key === Number(e.target.value));
@@ -666,11 +658,13 @@ export default function App() {
            </div>
         </div>
 
-        {/* Live & Playback Controls */}
+        {/* Controls */}
         <div className="flex items-center gap-4">
-           {/* Timeline Slider (Visible when not live or not at head) */}
            {sessionStartTime && sessionEndTime && currentReplayTime && (
-               <div className="hidden lg:flex flex-col justify-center w-48 xl:w-64 gap-1">
+               <div className="hidden lg:flex flex-col justify-center w-64 gap-1 group">
+                   <div className="relative h-1 bg-neutral-800 rounded-full overflow-hidden">
+                      <div className="absolute top-0 bottom-0 left-0 bg-red-600" style={{ width: `${((currentReplayTime.getTime() - sessionStartTime.getTime()) / (sessionEndTime.getTime() - sessionStartTime.getTime())) * 100}%`}}></div>
+                   </div>
                    <input 
                      type="range" 
                      min={sessionStartTime.getTime()} 
@@ -679,9 +673,9 @@ export default function App() {
                      value={currentReplayTime.getTime()} 
                      onChange={handleSeek}
                      onMouseUp={handleSeekCommit}
-                     className="w-full h-1 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-red-600 hover:accent-red-500"
+                     className="absolute w-64 h-4 opacity-0 cursor-pointer"
                    />
-                   <div className="flex justify-between text-[9px] text-neutral-500 font-exo font-bold uppercase">
+                   <div className="flex justify-between text-[9px] text-neutral-600 font-exo font-bold uppercase group-hover:text-neutral-400 transition-colors">
                       <span>{sessionStartTime.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
                       <span>{sessionEndTime.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
                    </div>
@@ -691,34 +685,34 @@ export default function App() {
            {isSessionLive && (
                <div className="flex items-center gap-2">
                    {isAtLiveHead ? (
-                       <div className="flex items-center gap-2 px-3 py-1 bg-red-600/10 border border-red-600/50 rounded animate-pulse">
-                          <Radio size={14} className="text-red-500" />
-                          <span className="text-xs font-bold text-red-500 font-orbitron tracking-widest">LIVE TIMING</span>
+                       <div className="flex items-center gap-2 px-3 py-1 bg-red-900/20 border border-red-500/30 rounded animate-pulse">
+                          <Radio size={12} className="text-red-500" />
+                          <span className="text-[10px] font-bold text-red-500 font-orbitron tracking-widest">LIVE</span>
                        </div>
                    ) : (
                        <button 
                          onClick={handleGoLive}
-                         className="flex items-center gap-2 px-3 py-1 bg-[#1E1E1E] border border-red-600 text-red-500 rounded hover:bg-red-600 hover:text-white transition-colors"
+                         className="flex items-center gap-2 px-3 py-1 bg-[#222] border border-red-600 text-red-500 rounded hover:bg-red-600 hover:text-white transition-colors"
                        >
-                          <Radio size={14} />
-                          <span className="text-xs font-bold font-orbitron tracking-widest">GO LIVE</span>
+                          <Radio size={12} />
+                          <span className="text-[10px] font-bold font-orbitron tracking-widest">GO LIVE</span>
                        </button>
                    )}
                </div>
            )}
 
-           <div className={`flex items-center bg-[#1E1E1E] rounded p-1 gap-1 border border-[#333] ${isAtLiveHead ? 'opacity-50 pointer-events-none grayscale' : ''}`}>
+           <div className={`flex items-center bg-[#111] rounded p-0.5 gap-0.5 border border-[#222] ${isAtLiveHead ? 'opacity-50 pointer-events-none grayscale' : ''}`}>
               <button 
                 onClick={() => setIsPlaying(!isPlaying)} 
-                className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${isPlaying ? 'text-red-500' : 'text-green-500 hover:bg-[#2A2A2A]'}`}
+                className={`w-7 h-7 flex items-center justify-center rounded transition-colors ${isPlaying ? 'text-red-500 hover:bg-[#1a1a1a]' : 'text-green-500 hover:bg-[#1a1a1a]'}`}
               >
-                 {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}
+                 {isPlaying ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
               </button>
               {PLAYBACK_SPEEDS.map(speed => (
                 <button
                   key={speed}
                   onClick={() => setPlaybackSpeed(speed)}
-                  className={`text-xs font-bold px-3 h-8 rounded transition-colors uppercase font-exo ${playbackSpeed === speed ? 'bg-red-600 text-white' : 'text-neutral-500 hover:text-white hover:bg-[#2A2A2A]'}`}
+                  className={`text-[9px] font-bold px-2 h-7 rounded transition-colors uppercase font-exo ${playbackSpeed === speed ? 'bg-[#333] text-white' : 'text-neutral-600 hover:text-neutral-300 hover:bg-[#1a1a1a]'}`}
                 >
                   {speed}x
                 </button>
@@ -727,77 +721,84 @@ export default function App() {
         </div>
       </header>
 
-      {/* --- MAIN CONTENT AREA --- */}
-      <main className="flex-1 overflow-hidden p-4 bg-[#121212]">
+      {/* --- MAIN CONTENT --- */}
+      <main className="flex-1 overflow-hidden p-3 bg-[#0A0A0A]">
          {currentView === 'dashboard' ? (
-             <div className="grid grid-cols-12 gap-4 h-full">
+             <div className="flex flex-col lg:flex-row gap-3 h-full">
                 
-                {/* LEFT COLUMN: Map & Environmental Data */}
-                <div className="col-span-12 lg:col-span-8 flex flex-col gap-4 h-full min-h-0">
+                {/* 1. LEFT COLUMN: LEADERBOARD (Broadcast Style) */}
+                {/* Fixed widths for better table stability on large screens */}
+                <div className="w-full lg:w-[380px] xl:w-[450px] shrink-0 h-full min-h-0 flex flex-col transition-all duration-300">
+                   <LiveLeaderboard drivers={driversWithDrs} />
+                </div>
+
+                {/* 2. RIGHT COLUMN: MAIN FEED & STATS */}
+                <div className="flex-1 h-full min-h-0 flex flex-col gap-3 min-w-0">
                    
-                   {/* RACE TITLE ROW */}
-                   <div className="flex justify-between items-end pb-2 border-b border-[#2A2A2A]">
-                      <div>
-                        <h1 className="text-3xl font-orbitron font-bold uppercase tracking-wide leading-none text-white">
-                          {session?.session_name === 'Race' ? 'Race' : session?.session_name || 'NO SESSION'}
-                        </h1>
-                        <div className="text-neutral-500 font-exo font-medium text-lg mt-1 uppercase">
-                          {session ? `${session.country_name} // Lap ${displayLap}/${totalLaps || '??'}` : '---'}
-                        </div>
-                      </div>
-                      
-                      <div className="flex gap-4">
-                         <div className="bg-[#1E1E1E] border border-[#333] rounded px-4 py-2 min-w-[140px]">
-                            <div className="text-[10px] uppercase text-neutral-500 font-bold tracking-wider font-orbitron">Session Clock</div>
-                            <div className="text-2xl font-rajdhani font-bold tracking-wide text-white">{timeString}</div>
+                   {/* 2a. Session Header Info */}
+                   <div className="bg-[#111] border border-[#222] rounded-lg p-4 flex items-center justify-between shadow-lg shrink-0">
+                      <div className="flex flex-col">
+                         <div className="flex items-center gap-2 mb-1">
+                            <span className="w-1.5 h-6 bg-red-600 block rounded-sm"></span>
+                            <h1 className="text-2xl font-orbitron font-black uppercase tracking-tight text-white leading-none">
+                              {session?.session_name || 'NO SESSION'}
+                            </h1>
                          </div>
-                         <div className={`px-6 py-2 rounded flex items-center justify-center min-w-[200px] font-orbitron font-bold text-2xl uppercase tracking-tighter ${
-                            trackStatus === 'GREEN' ? 'bg-green-600 text-white' : 
-                            trackStatus === 'RED' ? 'bg-red-600 text-white' : 
-                            'bg-yellow-400 text-black'
+                         <div className="text-neutral-500 font-exo font-bold text-sm uppercase tracking-wider pl-3.5">
+                            {session ? `${session.country_name} // ${session.year}` : '---'}
+                         </div>
+                      </div>
+
+                      <div className="flex items-center gap-4">
+                         {/* Lap Counter */}
+                         <div className="flex flex-col items-end">
+                            <span className="text-[10px] text-neutral-500 uppercase font-bold tracking-wider font-orbitron">Lap</span>
+                            <div className="flex items-baseline gap-1">
+                               <span className="text-3xl font-rajdhani font-bold text-white">{displayLap}</span>
+                               <span className="text-lg font-rajdhani font-medium text-neutral-600">/ {totalLaps || '--'}</span>
+                            </div>
+                         </div>
+                         
+                         <div className="w-px h-10 bg-[#222]"></div>
+
+                         {/* Timer */}
+                         <div className="flex flex-col items-end min-w-[100px]">
+                            <span className="text-[10px] text-neutral-500 uppercase font-bold tracking-wider font-orbitron flex items-center gap-1"><Timer size={10} /> Time</span>
+                            <span className="text-3xl font-rajdhani font-bold text-white tabular-nums">{timeString}</span>
+                         </div>
+
+                         {/* Status Flag */}
+                         <div className={`h-12 px-6 rounded flex items-center justify-center gap-3 font-orbitron font-bold text-xl uppercase tracking-tighter shadow-inner ${
+                            trackStatus === 'GREEN' ? 'bg-green-600/10 text-green-500 border border-green-600/30' : 
+                            trackStatus === 'RED' ? 'bg-red-600 text-white animate-pulse' : 
+                            'bg-yellow-500 text-black animate-pulse'
                          }`}>
+                            <Flag size={20} fill="currentColor" />
                             {trackStatus === 'SC' ? 'SAFETY CAR' : 
                              trackStatus === 'VSC' ? 'VIRTUAL SC' : 
                              trackStatus === 'RED' ? 'RED FLAG' : 
-                             trackStatus === 'YELLOW' ? 'YELLOW FLAG' : 'TRACK CLEAR'}
+                             trackStatus === 'YELLOW' ? 'YELLOW FLAG' : 'GREEN'}
                          </div>
                       </div>
                    </div>
-    
-                   {/* MAP AREA */}
-                   <div className="flex-1 min-h-[300px] bg-[#1E1E1E] border border-[#2A2A2A] rounded-lg relative overflow-hidden shadow-lg">
-                      <div className="absolute top-4 left-4 z-10">
-                         <div className="text-xs font-bold text-neutral-400 uppercase tracking-widest bg-[#121212]/90 px-3 py-1.5 rounded backdrop-blur border border-[#333] font-orbitron">
-                            Live Circuit Map
-                         </div>
-                      </div>
-                      <TrackMap 
-                        drivers={driversWithDrs} 
-                        trackPath={trackPath} 
-                        playbackSpeed={playbackSpeed}
-                        driverCoordinates={driverCoordinates}
-                        mapTransform={mapTransform} 
-                      />
-                   </div>
-    
-                   {/* WIDGETS ROW */}
-                   <div className="h-60 shrink-0 grid grid-cols-12 gap-4">
-                      <div className="col-span-12 md:col-span-5 h-full">
+
+                   {/* 2b. Main Content Split */}
+                   <div className="flex-1 min-h-0 grid grid-rows-12 gap-3">
+                      {/* Incident Feed - Taking up most space */}
+                      <div className="row-span-8 bg-[#111] border border-[#222] rounded-lg overflow-hidden flex flex-col shadow-lg relative">
+                         <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-red-600 to-transparent opacity-50"></div>
                          <IncidentFeed messages={messages} />
                       </div>
-                      <div className="col-span-12 md:col-span-7 h-full">
+                      
+                      {/* Weather & Tire Stats */}
+                      <div className="row-span-4 bg-[#111] border border-[#222] rounded-lg overflow-hidden shadow-lg">
                          <WeatherWidget weather={weather} />
                       </div>
                    </div>
                 </div>
     
-                {/* RIGHT COLUMN: Leaderboard */}
-                <div className="col-span-12 lg:col-span-4 h-full min-h-0">
-                   <LiveLeaderboard drivers={driversWithDrs} />
-                </div>
-    
              </div>
-         ) : (
+         ) : currentView === 'telemetry' ? (
             // TELEMETRY VIEW
             session && currentReplayTime ? (
                <TelemetryDashboard 
@@ -807,9 +808,25 @@ export default function App() {
                  isPlaying={isPlaying}
                />
             ) : (
-                <div className="w-full h-full flex items-center justify-center text-neutral-500 font-exo animate-pulse">
-                   Load a session to view telemetry
+                <div className="w-full h-full flex items-center justify-center flex-col gap-4 text-neutral-600 font-exo">
+                   <Activity size={48} className="opacity-20" />
+                   <span className="animate-pulse">Load a session to view telemetry</span>
                 </div>
+            )
+         ) : (
+            // CIRCUIT VIEW
+            session && currentReplayTime ? (
+               <LiveCircuit 
+                  session={session}
+                  currentTime={currentReplayTime}
+                  drivers={drivers}
+                  playbackSpeed={playbackSpeed}
+               />
+            ) : (
+               <div className="w-full h-full flex items-center justify-center flex-col gap-4 text-neutral-600 font-exo">
+                  <MapIcon size={48} className="opacity-20" />
+                  <span className="animate-pulse">Load a session to view circuit map</span>
+               </div>
             )
          )}
       </main>

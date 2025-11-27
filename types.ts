@@ -1,4 +1,5 @@
 
+
 export enum TireCompound {
   SOFT = 'SOFT',
   MEDIUM = 'MEDIUM',
@@ -50,6 +51,7 @@ export interface RaceControlMessage {
   message: string;
   type: 'INFO' | 'FLAG' | 'SAFETY_CAR' | 'INCIDENT';
   flag?: string;
+  driver_number?: number;
 }
 
 export interface ChatMessage {

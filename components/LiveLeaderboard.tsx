@@ -1,132 +1,226 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Driver, TireCompound } from '../types';
+import { ChevronUp, ChevronDown, Minus } from 'lucide-react';
 
 interface Props {
   drivers: Driver[];
 }
 
 const TireIcon = ({ compound }: { compound: TireCompound }) => {
-  let bgColor = 'bg-neutral-700';
-  let textColor = 'text-white';
+  let bgColor = 'bg-neutral-800';
+  let textColor = 'text-neutral-400';
+  let borderColor = 'border-neutral-700';
   let label = 'S';
 
   switch (compound) {
-    case TireCompound.SOFT: label = 'Soft'; bgColor = 'bg-red-600'; break;
-    case TireCompound.MEDIUM: label = 'Medium'; bgColor = 'bg-yellow-400'; textColor='text-black'; break;
-    case TireCompound.HARD: label = 'Hard'; bgColor = 'bg-white'; textColor='text-black'; break;
-    case TireCompound.INTER: label = 'Inter'; bgColor = 'bg-green-500'; textColor='text-black'; break;
-    case TireCompound.WET: label = 'Wet'; bgColor = 'bg-blue-600'; break;
+    case TireCompound.SOFT: 
+        label = 'S'; 
+        bgColor = 'bg-[#1a1a1a]'; 
+        textColor='text-red-500'; 
+        borderColor='border-red-600';
+        break;
+    case TireCompound.MEDIUM: 
+        label = 'M'; 
+        bgColor = 'bg-[#1a1a1a]'; 
+        textColor='text-yellow-400'; 
+        borderColor='border-yellow-400';
+        break;
+    case TireCompound.HARD: 
+        label = 'H'; 
+        bgColor = 'bg-[#1a1a1a]'; 
+        textColor='text-white'; 
+        borderColor='border-white';
+        break;
+    case TireCompound.INTER: 
+        label = 'I'; 
+        bgColor = 'bg-[#1a1a1a]'; 
+        textColor='text-green-500'; 
+        borderColor='border-green-500';
+        break;
+    case TireCompound.WET: 
+        label = 'W'; 
+        bgColor = 'bg-[#1a1a1a]'; 
+        textColor='text-blue-500'; 
+        borderColor='border-blue-500';
+        break;
   }
 
   return (
-    <div className={`px-2 py-0.5 rounded-sm ${bgColor} ${textColor} text-[10px] font-bold uppercase tracking-wider min-w-[50px] text-center shadow-sm font-exo`}>
+    <div className={`w-6 h-6 rounded-full flex items-center justify-center border-2 ${borderColor} ${bgColor} ${textColor} text-[10px] font-bold shadow-sm`}>
       {label}
+    </div>
+  );
+};
+
+// Sub-component to handle position change animation
+const PositionBadge = ({ position, isOut, isLeader, defaultClass }: { position: number, isOut: boolean, isLeader: boolean, defaultClass: string }) => {
+  const [trend, setTrend] = useState<'UP' | 'DOWN' | null>(null);
+  const prevPosRef = useRef<number>(position);
+
+  useEffect(() => {
+    // Only animate if valid positions and not first render (implicitly handled by diff check)
+    if (!isOut && prevPosRef.current !== position) {
+      if (position < prevPosRef.current) {
+        setTrend('UP');
+      } else if (position > prevPosRef.current) {
+        setTrend('DOWN');
+      }
+      prevPosRef.current = position;
+
+      // Reset animation after 3 seconds
+      const timer = setTimeout(() => setTrend(null), 3000);
+      return () => clearTimeout(timer);
+    }
+    
+    // If they go out, update ref but don't show trend arrows usually
+    if (isOut) {
+        prevPosRef.current = 999;
+    }
+  }, [position, isOut]);
+
+  if (isOut) {
+      return <span className={defaultClass}>DNF</span>;
+  }
+
+  return (
+    <div className="flex items-center justify-center relative w-full h-full">
+      {/* Trend Indicator */}
+      <div className={`absolute -left-1 opacity-0 transition-opacity duration-500 ${trend ? 'opacity-100' : ''}`}>
+         {trend === 'UP' && <ChevronUp size={12} className="text-green-500 animate-bounce" />}
+         {trend === 'DOWN' && <ChevronDown size={12} className="text-red-500 animate-bounce" />}
+      </div>
+
+      {/* Position Number */}
+      <span className={`transition-all duration-300 transform ${
+          trend === 'UP' ? 'text-green-500 scale-125' : 
+          trend === 'DOWN' ? 'text-red-500 scale-110' : 
+          defaultClass
+      }`}>
+        {position}
+      </span>
     </div>
   );
 };
 
 const LiveLeaderboard: React.FC<Props> = ({ drivers }) => {
   return (
-    <div className="bg-[#1E1E1E] border border-[#2A2A2A] rounded-lg h-full flex flex-col overflow-hidden shadow-xl">
-      <div className="px-4 py-3 border-b border-[#2A2A2A] bg-[#222]">
-        <h3 className="font-orbitron font-bold text-sm text-neutral-300 uppercase tracking-widest">Live Leaderboard</h3>
+    <div className="bg-[#111] border border-[#222] rounded-lg h-full flex flex-col overflow-hidden shadow-lg relative">
+      {/* Header Decoration */}
+      <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-red-600 via-transparent to-transparent z-20"></div>
+      
+      <div className="px-4 py-3 bg-[#151515] border-b border-[#222] flex justify-between items-center shrink-0">
+        <h3 className="font-orbitron font-bold text-xs text-neutral-300 uppercase tracking-widest">Classification</h3>
+        <div className="flex gap-1">
+           <div className="w-1.5 h-1.5 rounded-full bg-red-600 animate-pulse"></div>
+           <div className="w-1.5 h-1.5 rounded-full bg-neutral-700"></div>
+        </div>
       </div>
       
-      <div className="overflow-auto flex-1 custom-scrollbar">
+      <div className="overflow-auto flex-1 custom-scrollbar bg-[#0A0A0A]">
         <table className="w-full text-left border-collapse">
-          <thead className="bg-[#1E1E1E] text-[11px] uppercase text-neutral-500 sticky top-0 z-10 font-bold tracking-wider border-b border-[#2A2A2A] font-orbitron">
+          <thead className="bg-[#151515] text-[10px] uppercase text-neutral-500 sticky top-0 z-10 font-bold tracking-widest border-b border-[#222] font-orbitron shadow-md">
             <tr>
-              <th className="p-3 text-center w-10">Pos</th>
-              <th className="p-3">Driver</th>
-              <th className="p-3 text-right w-20">Gap</th>
-              <th className="p-3 text-right w-20">Int</th>
-              <th className="p-3 text-right hidden sm:table-cell">Last Lap</th>
-              <th className="p-3 text-center">Tyre</th>
-              <th className="p-3 text-center hidden md:table-cell">Pits</th>
+              <th className="py-2 px-2 text-center w-10">Pos</th>
+              <th className="py-2 px-2">Driver</th>
+              <th className="py-2 px-2 text-right w-16">Int</th>
+              <th className="py-2 px-2 text-center w-10">Age</th>
+              <th className="py-2 px-2 text-center w-10">Tyre</th>
             </tr>
           </thead>
           <tbody className="text-neutral-200 text-sm font-medium font-rajdhani">
-            {drivers.map((driver) => {
-               // Lap Time Color Logic
-               // 0 = Standard (Neutral)
-               // 1 = Personal Best (Green)
-               // 2 = Session Best (Purple)
-               let lapTimeColor = 'text-neutral-300'; 
-               if (driver.currentSector1 === 2) {
-                   lapTimeColor = 'text-purple-500 font-bold'; // Session Best
-               } else if (driver.currentSector1 === 1) {
-                   lapTimeColor = 'text-green-500 font-bold'; // Personal Best
-               }
-               
-               // Gap Logic (To Leader)
-               let gapDisplay = '-';
-               if (driver.status === 'OUT') gapDisplay = 'DNF';
-               else if (driver.position === 1) gapDisplay = 'LEADER';
-               else if (driver.gapToLeader > 0) gapDisplay = `+${driver.gapToLeader.toFixed(3)}`;
-               
-               // Interval Logic (To Car Ahead)
-               let intervalDisplay = '-';
-               if (driver.status === 'OUT') intervalDisplay = '-';
-               else if (driver.position === 1) intervalDisplay = '-';
-               else if (driver.interval > 0) intervalDisplay = `+${driver.interval.toFixed(3)}`;
-
-               // Row styling for DNF/OUT drivers and Leader
+            {drivers.map((driver, index) => {
                const isOut = driver.status === 'OUT';
-               const isLeader = driver.position === 1;
+               const isLeader = driver.position === 1 && !isOut;
+               const drsActive = driver.drsAvailable && !isOut;
+               
+               // Formatting Interval
+               let intervalDisplay = '';
+               if (isOut) intervalDisplay = 'STOP';
+               else if (isLeader) intervalDisplay = 'Leader';
+               else if (driver.interval > 0) intervalDisplay = `+${driver.interval.toFixed(3)}`;
+               else intervalDisplay = '+0.000';
 
-               let rowClass = 'border-b border-[#2A2A2A] transition-colors group text-base ';
+               let rowClass = 'border-b border-[#1A1A1A] transition-colors group relative ';
                if (isOut) {
-                   rowClass += 'bg-[#1a1a1a] text-neutral-600 grayscale hover:bg-[#202020]';
+                   rowClass += 'bg-[#080808] text-neutral-600 grayscale opacity-80';
                } else if (isLeader) {
-                   // Highlight leader with gold tint and border
-                   rowClass += 'bg-yellow-900/10 hover:bg-yellow-900/20 border-l-4 border-l-yellow-500 relative';
+                   rowClass += 'bg-gradient-to-r from-[#222] to-transparent border-l-2 border-l-yellow-500';
                } else {
-                   rowClass += 'hover:bg-[#252525] border-l-4 border-l-transparent';
+                   rowClass += 'hover:bg-[#151515] border-l-2 border-l-transparent hover:border-l-red-500';
                }
+
+               const posClass = isOut ? 'text-red-600 tracking-widest text-[10px] font-black' : isLeader ? 'text-yellow-400' : 'text-neutral-400 group-hover:text-white';
 
                return (
                 <tr key={driver.id} className={rowClass}>
-                  <td className={`p-3 text-center font-bold w-10 ${isOut ? 'text-red-600' : isLeader ? 'text-yellow-500 text-lg' : 'text-neutral-500 group-hover:text-white'} font-rajdhani`}>
-                    {isOut ? 'DNF' : (driver.position === 0 ? '-' : driver.position)}
+                  
+                  {/* POSITION */}
+                  <td className={`py-2 px-2 text-center font-bold font-rajdhani text-base`}>
+                    <PositionBadge 
+                        position={driver.position || (index + 1)} 
+                        isOut={isOut} 
+                        isLeader={isLeader}
+                        defaultClass={posClass}
+                    />
                   </td>
-                  <td className="p-3">
+                  
+                  {/* DRIVER INFO */}
+                  <td className="py-2 px-2">
                     <div className="flex items-center gap-3">
-                      <div className={`relative w-8 h-8 rounded overflow-hidden shrink-0 border border-neutral-700 hidden sm:block ${isOut ? 'opacity-30' : 'bg-neutral-800'}`}>
-                         {driver.imgUrl ? (
-                           <img src={driver.imgUrl} alt={driver.code} className="w-full h-full object-cover object-top" />
-                         ) : (
-                           <div className="w-full h-full flex items-center justify-center text-[10px] text-neutral-500 font-exo">{driver.code}</div>
-                         )}
-                         <div className="absolute bottom-0 left-0 right-0 h-1" style={{ backgroundColor: driver.teamColor }}></div>
+                      {/* Team Line */}
+                      <div className="w-1 h-8 rounded-full" style={{ backgroundColor: driver.teamColor }}></div>
+                      
+                      {/* Headshot */}
+                      <div className="w-9 h-9 rounded bg-[#1a1a1a] overflow-hidden relative shrink-0 border border-[#333] hidden sm:block">
+                        {driver.imgUrl ? (
+                            <img 
+                                src={driver.imgUrl} 
+                                alt={driver.code} 
+                                className="w-full h-full object-cover object-top scale-125 translate-y-1.5" 
+                                loading="lazy"
+                            />
+                        ) : (
+                            <div className="w-full h-full flex items-center justify-center text-[8px] text-neutral-700 font-bold font-exo">
+                                {driver.code}
+                            </div>
+                        )}
                       </div>
-                      <div className="flex flex-col">
+
+                      <div className="flex flex-col min-w-0">
                          <div className="flex items-center gap-2">
-                            <span className={`font-bold tracking-tight uppercase font-rajdhani text-lg leading-none ${isOut ? 'text-neutral-600' : isLeader ? 'text-yellow-100' : 'text-white group-hover:text-red-500 transition-colors'}`}>{driver.code}</span>
-                            {/* DRS Indicator for specific driver */}
-                            {driver.drsAvailable && !isOut && (
-                               <div className="bg-green-500 text-black text-[9px] font-bold px-1 rounded font-exo leading-none py-0.5 animate-pulse shadow-[0_0_8px_rgba(34,197,94,0.6)]">DRS</div>
+                            <span className={`font-bold uppercase font-rajdhani text-lg leading-none tracking-tight ${isOut ? 'text-neutral-600 line-through decoration-red-900/50' : 'text-white'}`}>
+                                {driver.code}
+                            </span>
+                            
+                            {/* DRS Indicator - Always visible slot, toggles style */}
+                            {!isOut && (
+                                <div className={`text-[8px] font-black px-1.5 py-0.5 rounded font-exo leading-none transition-all duration-300 border ${
+                                    drsActive 
+                                    ? 'bg-green-500 text-black border-green-400 shadow-[0_0_8px_rgba(34,197,94,0.6)]' 
+                                    : 'bg-[#111] text-neutral-700 border-[#222]'
+                                }`}>
+                                    DRS
+                                </div>
                             )}
                          </div>
-                         <span className="text-[10px] text-neutral-500 uppercase font-exo leading-none mt-0.5 hidden sm:block">{driver.team.split(' ')[0]}</span>
+                         <span className="text-[9px] text-neutral-500 uppercase font-exo leading-none mt-1 truncate max-w-[120px]">{driver.team}</span>
                       </div>
                     </div>
                   </td>
-                  {/* GAP Column */}
-                  <td className={`p-3 text-right font-rajdhani font-semibold tabular-nums ${isOut ? 'text-neutral-600 italic' : isLeader ? 'text-yellow-500' : 'text-neutral-300'}`}>
-                     {gapDisplay}
-                  </td>
-                  {/* INT Column */}
-                  <td className={`p-3 text-right font-rajdhani font-medium tabular-nums ${isOut ? 'text-neutral-700' : 'text-neutral-400'}`}>
+
+                  {/* INTERVAL */}
+                  <td className={`py-2 px-2 text-right font-rajdhani font-semibold tabular-nums ${isOut ? 'text-red-900/50 italic text-xs' : isLeader ? 'text-yellow-500' : 'text-neutral-300'}`}>
                      {intervalDisplay}
                   </td>
-                  <td className={`p-3 text-right font-rajdhani font-semibold tabular-nums hidden sm:table-cell ${isOut ? 'text-neutral-700' : lapTimeColor}`}>
-                    {driver.lastLapTime}
+
+                  {/* TYRE AGE */}
+                  <td className={`py-2 px-2 text-center font-rajdhani font-medium ${isOut ? 'text-neutral-800' : 'text-neutral-400'} tabular-nums`}>
+                      {isOut || driver.tireAge === undefined ? '-' : `${driver.tireAge} L`}
                   </td>
-                  <td className={`p-3 flex justify-center ${isOut ? 'opacity-30' : ''}`}>
+
+                  {/* TYRE */}
+                  <td className={`py-2 px-2 flex justify-center items-center ${isOut ? 'opacity-20' : ''}`}>
                     <TireIcon compound={driver.tire} />
-                  </td>
-                   <td className="p-3 text-center text-neutral-500 font-rajdhani hidden md:table-cell">
-                    {driver.pitStops}
                   </td>
                 </tr>
               );

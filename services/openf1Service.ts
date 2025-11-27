@@ -4,17 +4,38 @@ const API_BASE = 'https://api.openf1.org/v1';
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Global throttle state to enforce minimum gap between all API calls
+let lastRequestTime = 0;
+const MIN_REQUEST_INTERVAL = 150; // ms (Relaxed from 200ms)
+
 // Helper to handle API limits or errors with retry logic
 const fetchAPI = async (endpoint: string, retries = 3, backoff = 1000, init?: RequestInit) => {
+  // Client-side Throttling
+  const now = Date.now();
+  const timeSinceLast = now - lastRequestTime;
+  if (timeSinceLast < MIN_REQUEST_INTERVAL) {
+    await delay(MIN_REQUEST_INTERVAL - timeSinceLast);
+  }
+  lastRequestTime = Date.now();
+
   try {
     const res = await fetch(`${API_BASE}${endpoint}`, init);
     
     // Handle Rate Limiting
     if (res.status === 429) {
       if (retries > 0) {
-        console.warn(`[ApexLive] Rate limited (429). Retrying in ${backoff}ms... (${endpoint})`);
-        await delay(backoff);
-        return fetchAPI(endpoint, retries - 1, backoff * 2, init);
+        // Add Jitter (0-500ms) to prevent synchronized retries
+        const jitter = Math.random() * 500;
+        const waitTime = backoff + jitter;
+        
+        // Silence the warning for the first couple of retries to keep console clean
+        if (retries <= 1) {
+            console.warn(`[ApexLive] Rate limit hit. Retrying in ${Math.round(waitTime)}ms...`);
+        }
+        
+        await delay(waitTime);
+        // Reduce backoff multiplier slightly for faster recovery
+        return fetchAPI(endpoint, retries - 1, backoff * 1.5, init);
       } else {
         throw new Error("API Rate Limit Exceeded - Try again later");
       }
@@ -26,8 +47,9 @@ const fetchAPI = async (endpoint: string, retries = 3, backoff = 1000, init?: Re
     // Ignore abort errors (user paused/cancelled)
     if (e.name === 'AbortError') return [];
     
-    console.error(e);
-    return []; // Return empty array to prevent app crash
+    // Log error but return empty array to prevent app crash
+    console.error(`[ApexLive] API Request Failed: ${e.message}`);
+    return []; 
   }
 };
 
