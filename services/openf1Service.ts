@@ -9,7 +9,7 @@ let lastRequestTime = 0;
 const MIN_REQUEST_INTERVAL = 150; // ms (Relaxed from 200ms)
 
 // Helper to handle API limits or errors with retry logic
-const fetchAPI = async (endpoint: string, retries = 3, backoff = 1000, init?: RequestInit) => {
+const fetchAPI = async (endpoint: string, retries = 3, backoff = 1000, init?: RequestInit): Promise<any> => {
   // Client-side Throttling
   const now = Date.now();
   const timeSinceLast = now - lastRequestTime;
@@ -46,6 +46,14 @@ const fetchAPI = async (endpoint: string, retries = 3, backoff = 1000, init?: Re
   } catch (e: any) {
     // Ignore abort errors (user paused/cancelled)
     if (e.name === 'AbortError') return [];
+    
+    // Retry on Network Errors (fetch failed to connect)
+    if (retries > 0) {
+        const jitter = Math.random() * 500;
+        const waitTime = backoff + jitter;
+        await delay(waitTime);
+        return fetchAPI(endpoint, retries - 1, backoff * 1.5, init);
+    }
     
     // Log error but return empty array to prevent app crash
     console.error(`[ApexLive] API Request Failed: ${e.message}`);
